@@ -33,6 +33,12 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+      - name: Patch minimuxer (allow cellular via utun)
+        run: |
+          FILE=Dependencies/minimuxer/Sources/MinimuxerImpl.swift
+          sed -i '' 's#isWifiSatisfied /\* ||#isWifiSatisfied || Minimuxer.network.isUTunAvailable /* ||#' "$FILE"
+          grep -n "isUTunAvailable /\* ||" "$FILE" || { echo 'PATCH FAILED - line not found'; exit 1; }
+          echo 'minimuxer patched OK'
 
       - name: Find Last Successful commit
         run: |
@@ -206,7 +212,7 @@ jobs:
           path: tests-run-logs.zip
 
       - uses: actions/upload-artifact@v4
-        if: steps.build_gate.outputs.should_skip != 'true'
+        if: always()
         with:
           name: SideStore-${{ env.MARKETING_VERSION }}.ipa
           path: SideStore.ipa
