@@ -48,6 +48,55 @@ jobs:
           grep -n "isUTunAvailable" "$FILE" | head -3
           echo 'minimuxer patched OK'
 
+      # upstream ogni tanto congela in Package.resolved una revisione che poi
+      # sparisce dal repo della dipendenza (force-push / branch cancellato):
+      # xcodebuild muore con "Could not resolve package dependencies".
+      # Qui togliamo SOLO i pin irraggiungibili: SPM li ri-risolve dal branch
+      # o dalla versione dichiarati. A monte sistemato, questo step non fa nulla.
+      - name: Ripara i pin SPM spariti da upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.error, urllib.request
+          p = 'AltStore.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
+          d = json.load(open(p, encoding='utf-8'))
+          tok = os.environ.get('GH_TOKEN', '')
+          tenuti, tolti = [], []
+          for pin in d.get('pins', []):
+              loc = pin.get('location', '')
+              rev = (pin.get('state') or {}).get('revision')
+              m = re.match(r'https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$', loc)
+              if not m or not rev:
+                  tenuti.append(pin)
+                  continue
+              url = f'https://api.github.com/repos/{m.group(1)}/{m.group(2)}/commits/{rev}'
+              hdr = {'Accept': 'application/vnd.github+json',
+                     'User-Agent': 'cellular-build'}
+              if tok:
+                  hdr['Authorization'] = f'Bearer {tok}'
+              req = urllib.request.Request(url, headers=hdr)
+              try:
+                  urllib.request.urlopen(req, timeout=30).read(1)
+                  tenuti.append(pin)
+              except urllib.error.HTTPError as e:
+                  if e.code in (404, 422):
+                      print(f'pin sparito: {pin["identity"]} {rev[:10]} (HTTP {e.code})')
+                      tolti.append(pin)
+                  else:
+                      print(f'controllo non concluso ({e.code}), tengo {pin["identity"]}')
+                      tenuti.append(pin)
+              except Exception as e:
+                  print(f'controllo non concluso ({e}), tengo {pin["identity"]}')
+                  tenuti.append(pin)
+          if tolti:
+              d['pins'] = tenuti
+              json.dump(d, open(p, 'w', encoding='utf-8'), indent=2)
+              print('rimossi:', [x['identity'] for x in tolti])
+          else:
+              print('tutti i pin sono raggiungibili, niente da fare')
+          PY
+
       - run: brew install ldid xcbeautify
 
       # --------------------------------------------------
