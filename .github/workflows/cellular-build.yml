@@ -30,8 +30,22 @@ jobs:
       - name: Patch minimuxer (allow cellular via utun)
         run: |
           FILE=Dependencies/minimuxer/Sources/MinimuxerImpl.swift
-          sed -i '' 's#isWifiSatisfied /\* ||#isWifiSatisfied || Minimuxer.network.isUTunAvailable /* ||#' "$FILE"
-          grep -n "isUTunAvailable /\* ||" "$FILE" || { echo 'PATCH FAILED - upstream ha cambiato la riga'; exit 1; }
+          python3 - "$FILE" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+          # gate di rete, tollerante a spazi e al ricevente (Minimuxer. / self. / ...)
+          pat = re.compile(r'(?P<recv>[A-Za-z_][\w.]*)\.network\.isWifiSatisfied(?P<ws>[ \t]*)/\* \|\|')
+          n = len(pat.findall(s))
+          if n != 1:
+              sys.exit(f'PATCH FAILED - trovate {n} occorrenze del gate isWifiSatisfied (attesa 1): upstream cambiato')
+          m = pat.search(s)
+          recv, ws = m.group('recv'), m.group('ws')
+          rep = f'{recv}.network.isWifiSatisfied || {recv}.network.isUTunAvailable{ws}/* ||'
+          open(p, 'w', encoding='utf-8').write(s[:m.start()] + rep + s[m.end():])
+          print('patched ->', rep)
+          PY
+          grep -n "isUTunAvailable" "$FILE" | head -3
           echo 'minimuxer patched OK'
 
       - run: brew install ldid xcbeautify
