@@ -20,12 +20,62 @@ jobs:
 
     steps:
       # codice SEMPRE fresco da upstream: nessuna sincronizzazione del fork
+      # submodules: false -> li inizializziamo noi sotto, con fallback tollerante
       - uses: actions/checkout@v4
         with:
           repository: SideStore/SideStore
           ref: develop
-          submodules: recursive
+          submodules: false
           fetch-depth: 0
+
+      # upstream a volte forza-pusha/rebasa un sottomodulo (es. SideSign durante
+      # il refactor altsign->sidesign) e il commit pinnato nel superprogetto sparisce:
+      # "actions/checkout" con submodules:recursive fallirebbe DURO al checkout
+      # stesso, senza artifact. Qui inizializziamo ogni submodule al pin esatto;
+      # solo se il pin è irraggiungibile, fallback alla punta del branch dichiarato
+      # in .gitmodules. A monte sistemato, questo step si limita al pin esatto.
+      - name: Ripara i submodule spariti da upstream
+        run: |
+          python3 - <<'PY'
+          import subprocess, re
+
+          out = subprocess.run(['git', 'config', '-f', '.gitmodules', '--get-regexp', '.'],
+                                capture_output=True, text=True).stdout
+          subs = {}
+          for line in out.splitlines():
+              key, val = line.split(' ', 1)
+              m = re.match(r'submodule\.(.+)\.(path|url|branch)$', key)
+              if not m:
+                  continue
+              name, field = m.groups()
+              subs.setdefault(name, {})[field] = val
+
+          status = subprocess.run(['git', 'submodule', 'status'], capture_output=True, text=True).stdout
+          for line in status.splitlines():
+              parts = line.strip().split()
+              if not parts:
+                  continue
+              sha, path = parts[0].lstrip('-+U'), parts[1]
+              name = next(n for n, s in subs.items() if s.get('path') == path)
+              branch = subs[name].get('branch', 'main')
+
+              r = subprocess.run(['git', 'submodule', 'update', '--init', path], capture_output=True, text=True)
+              if r.returncode == 0:
+                  print(f"OK pin esatto: {path} @ {sha[:8]}")
+              else:
+                  print(f"pin sparito per {path} ({sha[:8]}): {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else '??'}")
+                  print(f"fallback -> tip di '{branch}' su {path}")
+                  subprocess.run(['git', '-C', path, 'fetch', '--depth', '1', 'origin', branch], check=True)
+                  subprocess.run(['git', '-C', path, 'checkout', 'FETCH_HEAD'], check=True)
+                  newsha = subprocess.run(['git', '-C', path, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+                  print(f"  -> {path} ora a {newsha[:8]} (tip di {branch})")
+
+              # nipoti: init ricorsivo SOLO dentro il submodule già risolto,
+              # cosi' non si tocca/reimposta il pin del padre.
+              subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'], cwd=path, check=False)
+
+          print("submodule repair: done")
+          PY
 
       - name: Patch minimuxer (allow cellular via utun)
         run: |
@@ -47,6 +97,31 @@ jobs:
           PY
           grep -n "isUTunAvailable" "$FILE" | head -3
           echo 'minimuxer patched OK'
+
+      # bug upstream (github SideStore/SideStore #822/#851): il self-refresh di
+      # SideStore, quando le notifiche non sono autorizzate, mostra un alert
+      # "Finish Refresh" con un solo bottone "Continue" e ASPETTA il tap per
+      # sempre. Via Shortcuts/automazione headless non lo tocca nessuno: il
+      # refresh di SideStore stesso resta appeso in loop infinito (le altre app
+      # nel frattempo si rinnovano regolarmente). Qui si salta l'alert e si
+      # sospende sempre l'app da soli, come già succede quando le notifiche
+      # SONO autorizzate (stesso identico suspendToHomeScreen()).
+      - name: Patch self-refresh (evita l'alert 'Finish Refresh' che blocca l'automazione headless)
+        run: |
+          FILE=SideStore/Core/Operations/PipelineOperations/InstallAppOperation.swift
+          python3 - "$FILE" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+          pat = re.compile(r'handler\.requestBackgroundSuspension\s*\{\s*self\.suspendToHomeScreen\(\)\s*\}')
+          n = len(pat.findall(s))
+          if n != 2:
+              sys.exit(f'PATCH FAILED - trovate {n} occorrenze (attese 2): upstream cambiato')
+          s2 = pat.sub('self.suspendToHomeScreen()', s)
+          open(p, 'w', encoding='utf-8').write(s2)
+          print(f'patchate {n} occorrenze -> self.suspendToHomeScreen() diretto')
+          PY
+          echo 'self-refresh headless patched OK'
 
       # upstream ogni tanto congela in Package.resolved una revisione che poi
       # sparisce dal repo della dipendenza (force-push / branch cancellato):
