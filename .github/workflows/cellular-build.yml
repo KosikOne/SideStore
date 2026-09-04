@@ -98,30 +98,14 @@ jobs:
           grep -n "isUTunAvailable" "$FILE" | head -3
           echo 'minimuxer patched OK'
 
-      # bug upstream (github SideStore/SideStore #822/#851): il self-refresh di
-      # SideStore, quando le notifiche non sono autorizzate, mostra un alert
-      # "Finish Refresh" con un solo bottone "Continue" e ASPETTA il tap per
-      # sempre. Via Shortcuts/automazione headless non lo tocca nessuno: il
-      # refresh di SideStore stesso resta appeso in loop infinito (le altre app
-      # nel frattempo si rinnovano regolarmente). Qui si salta l'alert e si
-      # sospende sempre l'app da soli, come già succede quando le notifiche
-      # SONO autorizzate (stesso identico suspendToHomeScreen()).
-      - name: Patch self-refresh (evita l'alert 'Finish Refresh' che blocca l'automazione headless)
-        run: |
-          FILE=SideStore/Core/Operations/PipelineOperations/InstallAppOperation.swift
-          python3 - "$FILE" <<'PY'
-          import re, sys
-          p = sys.argv[1]
-          s = open(p, encoding='utf-8').read()
-          pat = re.compile(r'handler\.requestBackgroundSuspension\s*\{\s*self\.suspendToHomeScreen\(\)\s*\}')
-          n = len(pat.findall(s))
-          if n != 2:
-              sys.exit(f'PATCH FAILED - trovate {n} occorrenze (attese 2): upstream cambiato')
-          s2 = pat.sub('self.suspendToHomeScreen()', s)
-          open(p, 'w', encoding='utf-8').write(s2)
-          print(f'patchate {n} occorrenze -> self.suspendToHomeScreen() diretto')
-          PY
-          echo 'self-refresh headless patched OK'
+      # Patch RIMOSSA il 04/09/2026: bug upstream #822/#851 (alert "Finish
+      # Refresh" che bloccava l'automazione headless in attesa di un tap che
+      # non arrivava mai) — upstream ha refattorizzato InstallAppOperation.swift
+      # e rimosso quel ramo interattivo, sostituendolo con una chiamata diretta
+      # e incondizionata a suspendToHomeScreen() (righe ~390-400 del file oggi).
+      # La patch falliva a "0 occorrenze attese 2" perché il codice che doveva
+      # correggere non esiste più: il problema è già risolto a monte, nessuna
+      # patch nostra necessaria.
 
       # upstream ogni tanto congela in Package.resolved una revisione che poi
       # sparisce dal repo della dipendenza (force-push / branch cancellato):
