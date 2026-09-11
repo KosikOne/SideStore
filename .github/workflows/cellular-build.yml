@@ -98,6 +98,32 @@ jobs:
           grep -n "isUTunAvailable" "$FILE" | head -3
           echo 'minimuxer patched OK'
 
+      # Il probe di raggiungibilita' (testTCP, poll con timeout) e' tarato per il
+      # loopback puro di LocalDevVPN (~1ms). Con un reflector Tailscale in mezzo
+      # (xddxdd/sidestore-vpn su subnet route 10.7.0.1/32) il giro di rete reale
+      # puo' superare i 250ms di default, facendo risultare il device "Unreachable"
+      # anche quando il reflector risponde correttamente. Alziamo solo il default,
+      # e' una `var` pensata apposta per essere configurabile.
+      - name: Alza il timeout del probe TCP (serve margine per il reflector Tailscale)
+        run: |
+          FILE=Dependencies/minimuxer/Common/MinimuxerConstants.swift
+          python3 - "$FILE" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+          pat = re.compile(r'public static var defaultTCPProbeTimeoutMs(?P<ws>[ \t]*): Int = \d+')
+          n = len(pat.findall(s))
+          if n != 1:
+              sys.exit(f'PATCH FAILED - trovate {n} occorrenze (attesa 1): upstream cambiato')
+          m = pat.search(s)
+          ws = m.group('ws')
+          rep = f'public static var defaultTCPProbeTimeoutMs{ws}: Int = 1200'
+          open(p, 'w', encoding='utf-8').write(s[:m.start()] + rep + s[m.end():])
+          print('patched ->', rep)
+          PY
+          grep -n "defaultTCPProbeTimeoutMs" "$FILE"
+          echo 'TCP probe timeout patched OK'
+
       # Patch RIMOSSA il 04/09/2026: bug upstream #822/#851 (alert "Finish
       # Refresh" che bloccava l'automazione headless in attesa di un tap che
       # non arrivava mai) — upstream ha refattorizzato InstallAppOperation.swift
