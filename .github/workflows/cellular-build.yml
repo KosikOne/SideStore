@@ -124,6 +124,32 @@ jobs:
           grep -n "defaultTCPProbeTimeoutMs" "$FILE"
           echo 'TCP probe timeout patched OK'
 
+      # resolveCandidateTunnels() scarta ogni interfaccia utun con indirizzi IPv6
+      # (pensato per distinguere il tunnel solo-IPv4 di LocalDevVPN). Tailscale
+      # pero' assegna SEMPRE anche un indirizzo IPv6 (ULA fd7a:...) alla sua utun,
+      # quindi con questo filtro la sua interfaccia viene scartata a monte, prima
+      # ancora di guardare le rotte: zero candidati, zero tentativi di connessione
+      # verso il reflector (confermato: contatori RX del reflector fermi a 0
+      # durante un tentativo di refresh con Tailscale connesso). Rimuoviamo solo
+      # il vincolo "niente IPv6", non il resto del filtro.
+      - name: Accetta tunnel utun dual-stack (serve per il reflector Tailscale)
+        run: |
+          FILE=Dependencies/minimuxer/Sources/Services/DeviceConnectionManager.swift
+          python3 - "$FILE" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding='utf-8').read()
+          pat = re.compile(r'!\$0\.interfaceAddresses\.v4\.isEmpty && \$0\.interfaceAddresses\.v6\.isEmpty[ \t]*\n')
+          n = len(pat.findall(s))
+          if n != 1:
+              sys.exit(f'PATCH FAILED - trovate {n} occorrenze (attesa 1): upstream cambiato')
+          s2 = pat.sub('!$0.interfaceAddresses.v4.isEmpty\n', s)
+          open(p, 'w', encoding='utf-8').write(s2)
+          print('patched OK')
+          PY
+          grep -n "interfaceAddresses.v4.isEmpty" "$FILE"
+          echo 'dual-stack tunnel filter patched OK'
+
       # Patch RIMOSSA il 04/09/2026: bug upstream #822/#851 (alert "Finish
       # Refresh" che bloccava l'automazione headless in attesa di un tap che
       # non arrivava mai) — upstream ha refattorizzato InstallAppOperation.swift
